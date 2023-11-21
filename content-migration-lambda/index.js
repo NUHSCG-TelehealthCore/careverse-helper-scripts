@@ -1,4 +1,5 @@
 const mysql = require('mysql2');
+require("dotenv").config();
 
 exports.handler = (event, context, callback) => {
     // Prevent the Lambda function from timing out
@@ -18,55 +19,57 @@ exports.handler = (event, context, callback) => {
         password: process.env.DB_PASSWORD
     });
 
+
     pool.getConnection((err, connection) => {
+    if (err) {
+        return callback(new Error("Error occurred while getting the connection"));
+    }
+
+    // Begin transaction
+    connection.beginTransaction(err => {
         if (err) {
-            return callback(new Error("Error occurred while getting the connection"));
+            connection.release();
+            return callback(new Error("Error occurred while creating the transaction"));
         }
 
-        // Begin transaction
-        connection.beginTransaction(err => {
+        // Execute SQL to delete articles table
+        connection.execute(`DELETE FROM ${targetDBName}.articles`, (err) => {
             if (err) {
-                connection.release();
-                return callback(new Error("Error occurred while creating the transaction"));
+                return connection.rollback(() => {
+                    connection.release();
+                    return callback(new Error("Failed to wipe out `articles` table"));
+                });
             }
 
-            // Execute SQL to delete articles table
-            connection.execute(`DELETE FROM ${targetDBName}.articles`, (err) => {
-                if (err) {
-                    return connection.rollback(() => {
-                        connection.release();
-                        return callback(new Error("Failed to wipe out `articles` table"));
-                    });
-                }
-
-                // Proceed to insert query execution
-                connection.execute(
-                    `INSERT INTO ${targetDBName}.articles 
-                     (nav_title, sub_nav_title, content, created_at, published_at, title, sub_title) 
-                     SELECT nav_title, sub_nav_title, content, created_at, published_at, title, sub_title 
+            // Proceed to insert query execution
+            connection.execute(
+                `INSERT INTO ${targetDBName}.articles
+                     (id, nav_title, sub_nav_title, content, created_at, published_at, title, sub_title, article_type)
+                     SELECT id, nav_title, sub_nav_title, content, created_at, published_at, title, sub_title, article_type
                      FROM ${sourceDBName}.articles`,
-                    (err) => {
+                (err) => {
+                    if (err) {
+                        return connection.rollback(() => {
+                            connection.release();
+                            return callback(new Error("Failed to insert into `articles` table " + err.message));
+                        });
+                    }
+
+                    // Commit transaction since no issue
+                    connection.commit(err => {
                         if (err) {
                             return connection.rollback(() => {
                                 connection.release();
-                                return callback(new Error("Failed to insert into `articles` table"));
+                                return callback(new Error("Commit failed"));
                             });
                         }
-
-                        // Commit transaction since no issue
-                        connection.commit(err => {
-                            if (err) {
-                                return connection.rollback(() => {
-                                    connection.release();
-                                    return callback(new Error("Commit failed"));
-                                });
-                            }
-                            connection.release();
-                            return callback(null, "Articles migrated successfully");
-                        });
-                    }
-                );
-            });
+                        connection.release();
+                        return callback(null, "Articles migrated successfully");
+                    });
+                }
+            );
         });
     });
+});
+
 };
