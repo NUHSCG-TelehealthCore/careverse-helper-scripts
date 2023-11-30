@@ -21,55 +21,132 @@ exports.handler = (event, context, callback) => {
 
 
     pool.getConnection((err, connection) => {
-    if (err) {
-        return callback(new Error("Error occurred while getting the connection"));
-    }
-
-    // Begin transaction
-    connection.beginTransaction(err => {
         if (err) {
-            connection.release();
-            return callback(new Error("Error occurred while creating the transaction"));
+            return callback(new Error("Error occurred while getting the connection"));
         }
 
-        // Execute SQL to delete articles table
-        connection.execute(`DELETE FROM ${targetDBName}.articles`, (err) => {
+        // Begin transaction
+        connection.beginTransaction(err => {
             if (err) {
-                return connection.rollback(() => {
-                    connection.release();
-                    return callback(new Error("Failed to wipe out `articles` table"));
-                });
+                connection.release();
+                return callback(new Error("Error occurred while creating the transaction"));
             }
 
-            // Proceed to insert query execution
-            connection.execute(
-                `INSERT INTO ${targetDBName}.articles
-                     (id, nav_title, sub_nav_title, content, created_at, published_at, title, sub_title, article_type)
-                     SELECT id, nav_title, sub_nav_title, content, created_at, published_at, title, sub_title, article_type
-                     FROM ${sourceDBName}.articles`,
-                (err) => {
+            connection.execute(`SET FOREIGN_KEY_CHECKS = 0;`, err => {
+                if (err) {
+                    connection.release();
+                    return callback(new Error("Error occurred while creating the transaction"));
+                }
+
+                // Execute SQL to delete articles table
+                connection.execute(`DELETE FROM ${targetDBName}.articles`, (err) => {
                     if (err) {
                         return connection.rollback(() => {
                             connection.release();
-                            return callback(new Error("Failed to insert into `articles` table " + err.message));
+                            return callback(new Error("Failed to wipe out `articles` table"));
                         });
                     }
 
-                    // Commit transaction since no issue
-                    connection.commit(err => {
-                        if (err) {
-                            return connection.rollback(() => {
-                                connection.release();
-                                return callback(new Error("Commit failed"));
+                    // Proceed to insert query execution
+                    connection.execute(
+                        `INSERT INTO ${targetDBName}.articles
+                     (id, nav_title, sub_nav_title, content, created_at, published_at, title, sub_title, article_type)
+                     SELECT id, nav_title, sub_nav_title, content, created_at, published_at, title, sub_title, article_type
+                     FROM ${sourceDBName}.articles`,
+                        (err) => {
+                            if (err) {
+                                return connection.rollback(() => {
+                                    connection.release();
+                                    return callback(new Error("Failed to insert into `articles` table " + err.message));
+                                });
+                            }
+
+                            // Commit transaction since no issue
+                            connection.commit(err => {
+                                if (err) {
+                                    return connection.rollback(() => {
+                                        connection.release();
+                                        return callback(new Error("Commit failed"));
+                                    });
+                                }
+
+                                // Files table delete
+                                connection.execute(`DELETE FROM ${targetDBName}.files;`, err => {
+                                    if (err) {
+                                        return connection.rollback(() => {
+                                            connection.release();
+                                            return callback(new Error("Failed to delete `files` table " + err.message));
+                                        });
+                                    }
+                                    // Files table insert
+                                    connection.execute(`
+                                    INSERT INTO ${targetDBName}.files
+                                    SELECT * FROM ${sourceDBName}.files;
+                                `, err => {
+                                        if (err) {
+                                            return connection.rollback(() => {
+                                                connection.release();
+                                                return callback(new Error("Failed to insert into `files` table " + err.message));
+                                            });
+                                        }
+
+                                        // files_folder_links table delete
+                                        connection.execute(`DELETE FROM ${targetDBName}.files_folder_links;`, err => {
+                                            if (err) {
+                                                return connection.rollback(() => {
+                                                    connection.release();
+                                                    return callback(new Error("Failed to delete `files_folder_links` table " + err.message));
+                                                });
+                                            }
+                                            // files_folder_links table insert
+                                            connection.execute(`
+                                            INSERT INTO ${targetDBName}.files_folder_links
+                                            SELECT * FROM ${sourceDBName}.files_folder_links;
+                                        `, err => {
+                                                if (err) {
+                                                    return connection.rollback(() => {
+                                                        connection.release();
+                                                        return callback(new Error("Failed to insert into `files_folder_links` table " + err.message));
+                                                    });
+                                                }
+
+                                                // files_related_morphs table delete
+                                                connection.execute(`DELETE FROM ${targetDBName}.files_related_morphs;`, err => {
+                                                    if (err) {
+                                                        return connection.rollback(() => {
+                                                            connection.release();
+                                                            return callback(new Error("Failed to delete `files_related_morphs` table " + err.message));
+                                                        });
+                                                    }
+                                                    // files_related_morphs table insert
+                                                    connection.execute(`
+                                                    INSERT INTO ${targetDBName}.files_related_morphs
+                                                    SELECT * FROM ${sourceDBName}.files_related_morphs;
+                                                `, err => {
+                                                        if (err) {
+                                                            return connection.rollback(() => {
+                                                                connection.release();
+                                                                return callback(new Error("Failed to insert into `files_related_morphs` table " + err.message));
+                                                            });
+                                                        }
+
+                                                        connection.release();
+                                                        return callback(null, "Contents migrated successfully");
+
+                                                    })
+                                                })
+
+                                            })
+                                        })
+
+                                    })
+                                })
                             });
                         }
-                        connection.release();
-                        return callback(null, "Articles migrated successfully");
-                    });
-                }
-            );
+                    );
+                });
+            });
         });
     });
-});
 
 };
